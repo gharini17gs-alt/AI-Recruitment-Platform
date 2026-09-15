@@ -3,8 +3,10 @@ from werkzeug.utils import secure_filename
 
 import os
 import re
+import shutil
 import fitz
 import pytesseract
+
 from PIL import Image
 
 
@@ -30,12 +32,32 @@ app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
 
 # ==========================================
-# TESSERACT PATH
+# TESSERACT CONFIGURATION
 # ==========================================
 
-pytesseract.pytesseract.tesseract_cmd = (
+tesseract_path = shutil.which("tesseract")
+
+if tesseract_path:
+
+    pytesseract.pytesseract.tesseract_cmd = (
+        tesseract_path
+    )
+
+elif os.path.exists(
     r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-)
+):
+
+    pytesseract.pytesseract.tesseract_cmd = (
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    )
+
+elif os.path.exists(
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
+):
+
+    pytesseract.pytesseract.tesseract_cmd = (
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
+    )
 
 
 # ==========================================
@@ -43,6 +65,7 @@ pytesseract.pytesseract.tesseract_cmd = (
 # ==========================================
 
 SKILLS = [
+
     "python",
     "java",
     "javascript",
@@ -96,7 +119,10 @@ def allowed_file(filename):
     if "." not in filename:
         return False
 
-    extension = filename.rsplit(".", 1)[1].lower()
+    extension = filename.rsplit(
+        ".",
+        1
+    )[1].lower()
 
     return extension in ALLOWED_EXTENSIONS
 
@@ -113,17 +139,108 @@ def extract_text_from_pdf(filepath):
 
         pdf = fitz.open(filepath)
 
+        # ----------------------------------
+        # Normal PDF text extraction
+        # ----------------------------------
+
         for page in pdf:
 
-            text += page.get_text()
+            page_text = page.get_text("text")
+
+            if page_text:
+
+                text += (
+                    page_text +
+                    "\n"
+                )
+
+
+        # ----------------------------------
+        # OCR FALLBACK
+        # ----------------------------------
+
+        if not text.strip():
+
+            print(
+                "No selectable text found."
+            )
+
+            print(
+                "Trying OCR on PDF..."
+            )
+
+            try:
+
+                pytesseract.get_tesseract_version()
+
+                tesseract_available = True
+
+            except Exception:
+
+                tesseract_available = False
+
+                print(
+                    "Tesseract OCR is not available."
+                )
+
+
+            if tesseract_available:
+
+                for page in pdf:
+
+                    try:
+
+                        pix = page.get_pixmap(
+                            matrix=fitz.Matrix(
+                                2,
+                                2
+                            ),
+                            alpha=False
+                        )
+
+                        image = Image.frombytes(
+                            "RGB",
+                            [
+                                pix.width,
+                                pix.height
+                            ],
+                            pix.samples
+                        )
+
+                        ocr_text = (
+                            pytesseract.image_to_string(
+                                image,
+                                config="--psm 6"
+                            )
+                        )
+
+                        if ocr_text:
+
+                            text += (
+                                ocr_text +
+                                "\n"
+                            )
+
+                    except Exception as error:
+
+                        print(
+                            "PDF OCR ERROR:",
+                            error
+                        )
+
 
         pdf.close()
 
+
     except Exception as error:
 
-        print("PDF ERROR:", error)
+        print(
+            "PDF ERROR:",
+            error
+        )
 
-    return text
+
+    return text.strip()
 
 
 # ==========================================
@@ -136,19 +253,24 @@ def extract_text_from_image(filepath):
 
         image = Image.open(filepath)
 
-        # Improve OCR reading
-        image = image.convert("RGB")
+        image = image.convert(
+            "RGB"
+        )
 
         text = pytesseract.image_to_string(
             image,
             config="--psm 6"
         )
 
-        return text
+        return text.strip()
+
 
     except Exception as error:
 
-        print("IMAGE OCR ERROR:", error)
+        print(
+            "IMAGE OCR ERROR:",
+            error
+        )
 
         return ""
 
@@ -159,11 +281,22 @@ def extract_text_from_image(filepath):
 
 def clean_text(text):
 
-    text = text.replace("\r", "\n")
+    text = text.replace(
+        "\r",
+        "\n"
+    )
 
-    text = re.sub(r"\n+", "\n", text)
+    text = re.sub(
+        r"\n+",
+        "\n",
+        text
+    )
 
-    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(
+        r"[ \t]+",
+        " ",
+        text
+    )
 
     return text.strip()
 
@@ -181,6 +314,7 @@ def extract_name(text):
         line = line.strip()
 
         if line:
+
             lines.append(line)
 
 
@@ -209,50 +343,63 @@ def extract_name(text):
         "professional summary",
         "computer skills",
         "academic",
-
         "bachelor",
         "master",
-
-        "enter your major",
-        "high school",
-        "college",
-        "university",
-
         "student",
         "fresher"
     ]
 
 
-    candidates = []
+    # --------------------------------------
+    # First try
+    # --------------------------------------
+
+    for line in lines[:20]:
+
+        lower_line = line.lower().strip()
 
 
-    # Check first 15 lines
-    for index, line in enumerate(lines[:15]):
+        # Skip headings
 
-        lower_line = line.lower()
+        if any(
+            word == lower_line
+            or word in lower_line
+            for word in invalid_words
+        ):
 
-
-        # Skip unwanted headings
-        if any(word in lower_line for word in invalid_words):
             continue
 
 
         # Skip email
+
         if "@" in line:
+
             continue
 
 
-        # Skip phone
-        if re.search(r"\d{5,}", line):
+        # Skip phone numbers
+
+        if re.search(
+            r"\d{5,}",
+            line
+        ):
+
             continue
 
 
-        # Skip year
-        if re.search(r"\b(19|20)\d{2}\b", line):
+        # Skip URLs
+
+        if (
+            "http://" in lower_line
+            or "https://" in lower_line
+            or "www." in lower_line
+        ):
+
             continue
 
 
-        # Remove unwanted characters
+        # Remove special characters
+
         candidate = re.sub(
             r"[^A-Za-z.\s]",
             "",
@@ -260,7 +407,6 @@ def extract_name(text):
         ).strip()
 
 
-        # Remove multiple spaces
         candidate = re.sub(
             r"\s+",
             " ",
@@ -268,47 +414,89 @@ def extract_name(text):
         )
 
 
-        words = candidate.replace(".", " ").split()
-
-
-        # Name should have 2 to 4 words
-        if 2 <= len(words) <= 4:
-
-            # Avoid long sentences
-            if len(candidate) <= 35:
-
-                score = 0
-
-
-                # Top lines priority
-                score += 20 - index
-
-
-                # Uppercase names
-                if line.isupper():
-                    score += 10
-
-
-                # Short name gets better priority
-                if len(words) <= 3:
-                    score += 5
-
-
-                candidates.append(
-                    (score, candidate)
-                )
-
-
-    if candidates:
-
-        candidates.sort(
-            reverse=True,
-            key=lambda x: x[0]
+        words = (
+            candidate
+            .replace(
+                ".",
+                " "
+            )
+            .split()
         )
 
-        name = candidates[0][1]
 
-        return name.title()
+        # ----------------------------------
+        # Name validation
+        # ----------------------------------
+
+        if 2 <= len(words) <= 4:
+
+            if len(candidate) <= 40:
+
+                bad_words = [
+
+                    "the",
+                    "and",
+                    "with",
+                    "from",
+                    "using",
+                    "developer",
+                    "engineer",
+                    "student",
+                    "resume",
+                    "objective"
+                ]
+
+
+                if any(
+                    word.lower()
+                    in bad_words
+                    for word in words
+                ):
+
+                    continue
+
+
+                if all(
+                    re.match(
+                        r"^[A-Za-z]+$",
+                        word
+                    )
+                    for word in words
+                ):
+
+                    return " ".join(
+                        word.capitalize()
+                        for word in words
+                    )
+
+
+    # --------------------------------------
+    # Second fallback
+    # --------------------------------------
+
+    for line in lines[:10]:
+
+        candidate = re.sub(
+            r"[^A-Za-z\s]",
+            "",
+            line
+        ).strip()
+
+
+        words = candidate.split()
+
+
+        if 2 <= len(words) <= 3:
+
+            if all(
+                word.isalpha()
+                for word in words
+            ):
+
+                return " ".join(
+                    word.capitalize()
+                    for word in words
+                )
 
 
     return "Candidate Name Not Found"
@@ -320,40 +508,156 @@ def extract_name(text):
 
 def extract_email(text):
 
-    # Normal email pattern
-    pattern = (
-        r"[A-Za-z0-9._%+-]+"
-        r"@"
-        r"[A-Za-z0-9.-]+"
-        r"\."
-        r"[A-Za-z]{2,}"
+    # --------------------------------------
+    # Standard email pattern
+    # --------------------------------------
+
+    email_pattern = (
+        r"[A-Za-z0-9._%+\-]+"
+        r"@[A-Za-z0-9.\-]+"
+        r"\.[A-Za-z]{2,}"
     )
 
+
+    # --------------------------------------
+    # First attempt:
+    # Normal email
+    # --------------------------------------
+
     match = re.search(
-        pattern,
+        email_pattern,
         text
     )
 
     if match:
 
-        return match.group()
+        return match.group(0)
 
 
-    # OCR sometimes adds spaces
-    text_no_spaces = re.sub(
+    # --------------------------------------
+    # Second attempt:
+    # Remove spaces
+    #
+    # Example:
+    # harini @ gmail . com
+    # --------------------------------------
+
+    normalized = re.sub(
         r"\s+",
         "",
         text
     )
 
+
     match = re.search(
-        pattern,
-        text_no_spaces
+        email_pattern,
+        normalized
     )
 
     if match:
 
-        return match.group()
+        return match.group(0)
+
+
+    # --------------------------------------
+    # Third attempt:
+    # OCR formats
+    #
+    # Example:
+    # harini [at] gmail [dot] com
+    # --------------------------------------
+
+    ocr_text = text.lower()
+
+
+    # [at]
+
+    ocr_text = re.sub(
+        r"\s*\[\s*at\s*\]\s*",
+        "@",
+        ocr_text
+    )
+
+
+    # (at)
+
+    ocr_text = re.sub(
+        r"\s*\(\s*at\s*\)\s*",
+        "@",
+        ocr_text
+    )
+
+
+    # " at "
+
+    ocr_text = re.sub(
+        r"\s+at\s+",
+        "@",
+        ocr_text
+    )
+
+
+    # [dot]
+
+    ocr_text = re.sub(
+        r"\s*\[\s*dot\s*\]\s*",
+        ".",
+        ocr_text
+    )
+
+
+    # (dot)
+
+    ocr_text = re.sub(
+        r"\s*\(\s*dot\s*\)\s*",
+        ".",
+        ocr_text
+    )
+
+
+    # " dot "
+
+    ocr_text = re.sub(
+        r"\s+dot\s+",
+        ".",
+        ocr_text
+    )
+
+
+    match = re.search(
+        email_pattern,
+        ocr_text
+    )
+
+    if match:
+
+        return match.group(0)
+
+
+    # --------------------------------------
+    # Fourth attempt:
+    # OCR may put spaces inside email
+    # --------------------------------------
+
+    email_candidates = re.findall(
+        r"[A-Za-z0-9._%+\-]+\s*@\s*"
+        r"[A-Za-z0-9.\-]+\s*\.\s*"
+        r"[A-Za-z]{2,}",
+        text
+    )
+
+
+    if email_candidates:
+
+        email = email_candidates[0]
+
+        email = re.sub(
+            r"\s+",
+            "",
+            email
+        )
+
+        return email
 
 
     return "Email Not Found"
@@ -365,7 +669,6 @@ def extract_email(text):
 
 def extract_phone(text):
 
-    # Remove spaces and special characters
     cleaned_text = re.sub(
         r"[^\d+]",
         "",
@@ -373,7 +676,6 @@ def extract_phone(text):
     )
 
 
-    # Indian mobile number
     pattern = r"(?:\+91)?[6-9]\d{9}"
 
 
@@ -388,7 +690,6 @@ def extract_phone(text):
         phone = match.group()
 
 
-        # Remove +91 for display
         if phone.startswith("+91"):
 
             phone = phone[3:]
@@ -415,10 +716,13 @@ def extract_skills(text):
 
         if skill.lower() in text_lower:
 
-            if skill.title() not in found_skills:
+            formatted_skill = skill.title()
+
+
+            if formatted_skill not in found_skills:
 
                 found_skills.append(
-                    skill.title()
+                    formatted_skill
                 )
 
 
@@ -469,6 +773,7 @@ def extract_education(text):
 
 
         if not clean_line:
+
             continue
 
 
@@ -521,7 +826,10 @@ def extract_experience(text):
 
             years = match.group(1)
 
-            return years + " Years Experience"
+            return (
+                years +
+                " Years Experience"
+            )
 
 
     return "Fresher"
@@ -533,7 +841,9 @@ def extract_experience(text):
 
 def recommend_job_role(skills):
 
-    skills_lower = " ".join(skills).lower()
+    skills_lower = " ".join(
+        skills
+    ).lower()
 
 
     if (
@@ -604,64 +914,83 @@ def recommend_job_role(skills):
 # SKILL GAP ANALYSIS
 # ==========================================
 
-def get_missing_skills(job_role, skills):
+def get_missing_skills(
+    job_role,
+    skills
+):
 
     role_requirements = {
 
         "Data Scientist": [
+
             "Python",
             "SQL",
             "Machine Learning",
             "Pandas",
             "Numpy"
+
         ],
 
         "Machine Learning Engineer": [
+
             "Python",
             "Machine Learning",
             "Tensorflow",
             "Docker"
+
         ],
 
         "Data Analyst": [
+
             "Excel",
             "SQL",
             "Power BI",
             "Python"
+
         ],
 
         "Web Developer": [
+
             "HTML",
             "CSS",
             "JavaScript",
             "React"
+
         ],
 
         "Frontend Developer": [
+
             "HTML",
             "CSS",
             "JavaScript",
             "React"
+
         ],
 
         "Python Developer": [
+
             "Python",
             "Flask",
             "SQL",
             "Git"
+
         ],
 
         "Java Developer": [
+
             "Java",
             "SQL",
             "Git"
+
         ],
 
         "Software Developer": [
+
             "Python",
             "Java",
             "SQL",
             "Git"
+
         ]
     }
 
@@ -675,8 +1004,8 @@ def get_missing_skills(job_role, skills):
     user_skills_lower = [
 
         skill.lower()
-
         for skill in skills
+
     ]
 
 
@@ -685,7 +1014,10 @@ def get_missing_skills(job_role, skills):
 
     for skill in required_skills:
 
-        if skill.lower() not in user_skills_lower:
+        if (
+            skill.lower()
+            not in user_skills_lower
+        ):
 
             missing_skills.append(
                 skill
@@ -700,7 +1032,6 @@ def get_missing_skills(job_role, skills):
 # ==========================================
 
 def calculate_score(
-
     name,
     email,
     phone,
@@ -712,17 +1043,26 @@ def calculate_score(
     score = 0
 
 
-    if name != "Candidate Name Not Found":
+    if (
+        name !=
+        "Candidate Name Not Found"
+    ):
 
         score += 15
 
 
-    if email != "Email Not Found":
+    if (
+        email !=
+        "Email Not Found"
+    ):
 
         score += 15
 
 
-    if phone != "Phone Not Found":
+    if (
+        phone !=
+        "Phone Not Found"
+    ):
 
         score += 10
 
@@ -730,16 +1070,17 @@ def calculate_score(
     if "No Skills Found" not in skills:
 
         skill_score = min(
-
             len(skills) * 5,
-
             25
         )
 
         score += skill_score
 
 
-    if education != "Education Not Found":
+    if (
+        education !=
+        "Education Not Found"
+    ):
 
         score += 20
 
@@ -763,11 +1104,8 @@ def calculate_score(
 def home():
 
     return render_template(
-
         "index.html",
-
         analysis=None,
-
         error=None
     )
 
@@ -782,15 +1120,15 @@ def home():
 )
 def analyze():
 
+    # --------------------------------------
     # Check file
+    # --------------------------------------
+
     if "resume" not in request.files:
 
         return render_template(
-
             "index.html",
-
             analysis=None,
-
             error="Please upload a resume file."
         )
 
@@ -798,64 +1136,93 @@ def analyze():
     file = request.files["resume"]
 
 
+    # --------------------------------------
     # Check empty file
+    # --------------------------------------
+
     if file.filename == "":
 
         return render_template(
-
             "index.html",
-
             analysis=None,
-
             error="Please select a resume file."
         )
 
 
+    # --------------------------------------
     # Check extension
-    if not allowed_file(file.filename):
+    # --------------------------------------
+
+    if not allowed_file(
+        file.filename
+    ):
 
         return render_template(
-
             "index.html",
-
             analysis=None,
-
-            error="Only PDF, JPG, JPEG and PNG files are supported."
+            error=(
+                "Only PDF, JPG, JPEG "
+                "and PNG files are supported."
+            )
         )
 
 
+    # --------------------------------------
     # Secure filename
+    # --------------------------------------
+
     filename = secure_filename(
         file.filename
     )
 
 
     filepath = os.path.join(
-
         app.config["UPLOAD_FOLDER"],
-
         filename
     )
 
 
+    # --------------------------------------
     # Save file
-    file.save(filepath)
+    # --------------------------------------
+
+    try:
+
+        file.save(filepath)
+
+    except Exception as error:
+
+        print(
+            "FILE SAVE ERROR:",
+            error
+        )
+
+        return render_template(
+            "index.html",
+            analysis=None,
+            error=(
+                "Could not save the uploaded file."
+            )
+        )
 
 
+    # --------------------------------------
     # Get extension
+    # --------------------------------------
+
     extension = filename.rsplit(
-
         ".",
-
         1
-
     )[1].lower()
 
 
     text = ""
 
 
+    # --------------------------------------
     # PDF
+    # --------------------------------------
+
     if extension == "pdf":
 
         text = extract_text_from_pdf(
@@ -863,14 +1230,16 @@ def analyze():
         )
 
 
+    # --------------------------------------
     # IMAGE
+    # --------------------------------------
+
     elif extension in [
 
         "jpg",
-
         "jpeg",
-
         "png"
+
     ]:
 
         text = extract_text_from_image(
@@ -878,29 +1247,51 @@ def analyze():
         )
 
 
+    # --------------------------------------
     # Clean text
+    # --------------------------------------
+
     text = clean_text(text)
 
 
+    # --------------------------------------
     # Check extracted text
+    # --------------------------------------
+
     if not text:
 
         return render_template(
-
             "index.html",
-
             analysis=None,
-
-            error="Could not read text from this resume."
+            error=(
+                "Could not read text from "
+                "this resume. Please upload "
+                "a text-based PDF or clear image."
+            )
         )
 
 
+    # --------------------------------------
     # DEBUG
-    print("\n==============================")
-    print("RESUME TEXT")
-    print("==============================")
+    # --------------------------------------
+
+    print(
+        "\n=============================="
+    )
+
+    print(
+        "RESUME TEXT"
+    )
+
+    print(
+        "=============================="
+    )
+
     print(text)
-    print("==============================\n")
+
+    print(
+        "==============================\n"
+    )
 
 
     # ======================================
@@ -937,7 +1328,10 @@ def analyze():
     )
 
 
+    # --------------------------------------
     # No skills
+    # --------------------------------------
+
     if not skills:
 
         skills = [
@@ -959,9 +1353,7 @@ def analyze():
     # ======================================
 
     missing_skills = get_missing_skills(
-
         job_role,
-
         skills
     )
 
@@ -971,17 +1363,11 @@ def analyze():
     # ======================================
 
     score = calculate_score(
-
         candidate_name,
-
         email,
-
         phone,
-
         skills,
-
         education,
-
         experience
     )
 
@@ -1009,15 +1395,17 @@ def analyze():
         "missing_skills": missing_skills,
 
         "score": score
+
     }
 
 
+    # ======================================
+    # RETURN RESULTS
+    # ======================================
+
     return render_template(
-
         "index.html",
-
         analysis=analysis,
-
         error=None
     )
 
