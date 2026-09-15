@@ -1,5 +1,6 @@
 Flask
+gunicorn
 PyMuPDF
 pytesseract
 Pillow
-gunicorn
+Werkzeug
