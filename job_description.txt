@@ -1,0 +1,14 @@
+Job Title: Python Developer
+
+Education: Bachelor
+
+Experience: 3 years
+
+Required Skills: Python, SQL, Git
+
+Job Type: Full Time
+
+Job Description:
+We are looking for a Python Developer who has good knowledge of Python,
+SQL and Git. The candidate should have a Bachelor's degree and at least
+3 years of experience in software development.
